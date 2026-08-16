@@ -64,13 +64,14 @@ if WAYLAND:
     from gi.repository import Gdk, Gio, GLib, Gtk
     from gi.repository import Gtk4LayerShell as LayerShell
 
+# TODO TOGGLE MODE WRONG, NORMAL MODE CORRECT
 SOCK_PATH = "/run/midscroll/state.sock"
 ICON_PATH = "/usr/share/midscroll/move-vertical.svg"
 BADGE_PX = 42       # badge diameter
 ICON_PX = 24        # icon size inside the badge
 GHOST_W = 22        # fallback cursor size, when the theme can't be read
 GHOST_H = 34
-GHOST_ALPHA = 0.85  # so the ghost reads as a copy, not the real pointer
+GHOST_ALPHA = 1.0  # so the ghost reads as a copy, not the real pointer
 FOCUS_POLL_SEC = 1.0
 STALE_SEC = 5.0     # take the overlay down if the daemon stops talking
 MAX_OFFSET = 100000  # ignore an implausible position line
@@ -78,9 +79,8 @@ MAX_OFFSET = 100000  # ignore an implausible position line
 # Where to look for the pointer image, and what it might be called. The
 # ghost is meant to be your cursor, so it is loaded from the same theme
 # the compositor draws with rather than invented here.
-CURSOR_DIRS = ("~/.local/share/icons", "~/.icons", "/usr/share/icons",
-               "/usr/local/share/icons", "/usr/share/pixmaps")
-CURSOR_NAMES = ("default", "left_ptr", "arrow", "top_left_arrow")
+CURSOR_DIRS = ("/usr/share/icons", "")
+CURSOR_NAMES = ("size_all", "")
 DEFAULT_CURSOR_SIZE = 24
 XCURSOR_IMAGE = 0xfffd0002  # chunk type for an image, in an Xcursor file
 MAX_CURSOR_PX = 256         # sanity bound on an image we will map
@@ -112,8 +112,8 @@ def kde_input_setting(key, fallback=None):
 
 
 def cursor_theme_name():
-    return (os.environ.get("XCURSOR_THEME")
-            or kde_input_setting("cursorTheme", "default"))
+    theme = os.environ.get("XCURSOR_THEME") or kde_input_setting("cursorTheme", "default")
+    return "breeze_cursors" if theme == "default" else theme
 
 
 def cursor_size():
@@ -391,6 +391,7 @@ if WAYLAND:
             return True
 
         def note_line(self):
+            log.info(f"last_line: {time.monotonic()}")
             self.last_line = time.monotonic()
 
         def set_active(self, active):
