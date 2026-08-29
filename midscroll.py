@@ -1,39 +1,4 @@
 #!/usr/bin/python3
-"""midscroll - Windows-style middle-button drag autoscroll for Linux.
-
-Hold the middle mouse button and drag: the page scrolls in that direction,
-and the farther you drag from the point where you pressed, the faster it
-scrolls. Release to stop. A quick middle click without dragging passes
-through as a normal middle click (paste / open link in new tab).
-
-With TOGGLE_MODE enabled the interaction is instead the Windows-Explorer /
-Firefox style: a single middle click starts autoscroll, the cursor then
-moves freely and the page scrolls by its distance from that origin, and any
-mouse click stops it. (In that mode the middle button no longer pastes.)
-
-Works on Wayland and X11 in any application, because it sits at the kernel
-input layer: it grabs the real mouse and re-emits its events through a
-per-mouse uinput mirror, injecting high-resolution wheel events while a
-middle-drag is active. Each mirror copies its source mouse's name and
-vendor/product IDs, so libinput/KDE keep applying that mouse's own
-pointer-speed and acceleration settings instead of reverting to defaults.
-
-Apps that use middle-drag themselves (CAD, slicers, games) can be
-blacklisted by window class; while one of them is focused, the middle
-button passes straight through. The focused window's class is reported by
-the session helper (midscroll-overlay) over the state socket.
-
-Which devices count as a mouse is decided automatically, and can be
-overridden per device with EXTRA_DEVICES / IGNORE_DEVICES (see
---list-devices for the identifiers, and SECURITY.md for what forcing a
-device does and does not allow).
-
-Tunables can be overridden in /etc/midscroll.conf (KEY = value lines) or
-per run on the command line: midscroll --help. The config file decides
-which devices this daemon opens, so it is only read when it is owned by
-root and not writable by anyone else.
-"""
-
 import argparse
 import asyncio
 import logging
@@ -47,7 +12,7 @@ import time
 
 from evdev import InputDevice, UInput, ecodes as e, list_devices
 
-VERSION = "1.14"
+VERSION = "1.15"
 
 log = logging.getLogger("midscroll")
 
@@ -68,6 +33,8 @@ TOGGLE_MODE = False       # True: click to start/stop instead of hold-and-drag
 DESKTOP_SCROLL = False    # True: also autoscroll over the desktop and panels
 GHOST_CURSOR = True       # True: helper draws a cursor at the dragged point
 GHOST_SCALE = 1.0         # ghost travel per unit of mouse motion
+SNAP_CURSOR_ON_RELEASE = True   # True: warp the anchored cursor to the
+                                # ghost position once the drag ends
 
 # Window-class substrings (case-insensitive) over which midscroll pauses
 # and the middle button behaves natively.
@@ -121,7 +88,7 @@ WRITE_DROP_BYTES = 65536   # disconnect a client this far behind
 FLOAT_KEYS = {"DEADZONE_PX", "TICK_HZ", "SPEED_MULT", "SPEED_EXP",
               "MAX_PX_PER_SEC", "PX_PER_NOTCH", "MAX_DRAG_PX", "GHOST_SCALE"}
 BOOL_KEYS = {"NATURAL", "TOGGLE_MODE", "DESKTOP_SCROLL", "GHOST_CURSOR",
-             "ALLOW_KEYBOARDS"}
+             "SNAP_CURSOR_ON_RELEASE", "ALLOW_KEYBOARDS"}
 DEVICE_KEYS = {"EXTRA_DEVICES", "IGNORE_DEVICES"}
 # Zero would divide by zero (TICK_HZ, PX_PER_NOTCH) or make the daemon
 # silently never scroll; only the dead zone may be zero.
@@ -517,10 +484,15 @@ class State:
         self.toggled = True
 
     def release(self):
-        """Return True if this was a plain click (no drag)."""
+        """Return (was_click, dx, dy).
+
+        dx/dy are the accumulated drag offset at release time, before it's
+        cleared.  A plain middle-click (no drag) returns dx=0, dy=0.
+        """
         was_click = self.pending
+        dx, dy = self.dx, self.dy
         self.reset()
-        return was_click
+        return was_click, dx, dy
 
 
 def _clamp(v):
@@ -528,6 +500,17 @@ def _clamp(v):
     # distance on its own; cap it the way Windows caps the cursor at the
     # screen edge, so slowing down never needs a huge reverse drag.
     return math.copysign(min(abs(v), MAX_DRAG_PX), v)
+
+
+def _snap_cursor(ui, dx, dy):
+    """Replay accumulated drag offset as one relative move.
+
+    A single pair of REL_X/REL_Y events makes the cursor appear at
+    its target position instantly with no animation.
+    """
+    ui.write(e.EV_REL, e.REL_X, int(dx))
+    ui.write(e.EV_REL, e.REL_Y, int(dy))
+    ui.syn()
 
 
 def _is_button(code):
@@ -651,6 +634,7 @@ def _resync(ui, dev, held, st):
             changed = True
         elif st.pending or st.active:
             st.release()  # drag button never went to the virtual device
+                          # (dx/dy discarded; no snap needed on unplugged)
     if changed:
         ui.syn()
 
@@ -801,12 +785,21 @@ async def pump(path, dev, states, tasks, focus, our_paths):
                     if st.passthrough:
                         st.passthrough = False
                         ui.write(e.EV_KEY, e.BTN_MIDDLE, 0)
-                    elif st.release():
-                        # No drag happened: replay as a normal middle click.
-                        ui.write(e.EV_KEY, e.BTN_MIDDLE, 1)
-                        ui.syn()
-                        ui.write(e.EV_KEY, e.BTN_MIDDLE, 0)
-                        ui.syn()
+                    else:
+                        was_click, dx, dy = st.release()
+                        if SNAP_CURSOR_ON_RELEASE:
+                            # Catch the anchored cursor up to wherever the real
+                            # mouse ended up, like Windows does.
+                            sx, sy = int(dx), int(dy)
+                            if sx or sy:
+                                log.info("snap cursor: dx=%g dy=%g", sx, sy)
+                                _snap_cursor(ui, sx, sy)
+                        if was_click:
+                            # No drag happened (never exceeded dead zone).
+                            ui.write(e.EV_KEY, e.BTN_MIDDLE, 1)
+                            ui.syn()
+                            ui.write(e.EV_KEY, e.BTN_MIDDLE, 0)
+                            ui.syn()
                 continue
             if ev.type == e.EV_REL and ev.code in (e.REL_X, e.REL_Y):
                 if st.toggled:
@@ -1110,6 +1103,10 @@ def parse_args(argv=None):
                    default=None, dest="ghost_cursor",
                    help="tell the session helper where to draw a ghost "
                         "cursor while dragging (default: on)")
+    p.add_argument("--snap-cursor", action=argparse.BooleanOptionalAction,
+                   default=None, dest="snap_cursor",
+                   help="warp the anchored cursor to the ghost position "
+                        "once a drag-scroll ends (default: on)")
     p.add_argument("--blacklist", metavar="APPS", default=None,
                    help="comma-separated window-class substrings over which "
                         "midscroll pauses (default: "
@@ -1153,6 +1150,8 @@ def cli():
         globals()["DESKTOP_SCROLL"] = args.desktop_scroll
     if args.ghost_cursor is not None:
         globals()["GHOST_CURSOR"] = args.ghost_cursor
+    if args.snap_cursor is not None:
+        globals()["SNAP_CURSOR_ON_RELEASE"] = args.snap_cursor
     if args.blacklist is not None:
         globals()["BLACKLIST"] = parse_blacklist(args.blacklist)
     for key, specs in (("EXTRA_DEVICES", args.extra_devices),
@@ -1163,11 +1162,12 @@ def cli():
         report_devices()
         return
     log.debug("tunables: %s NATURAL=%s TOGGLE_MODE=%s DESKTOP_SCROLL=%s "
-              "GHOST_CURSOR=%s ALLOW_KEYBOARDS=%s BLACKLIST=%s "
+              "GHOST_CURSOR=%s SNAP_CURSOR=%s ALLOW_KEYBOARDS=%s BLACKLIST=%s "
               "EXTRA_DEVICES=%s IGNORE_DEVICES=%s",
               " ".join(f"{k}={globals()[k]:g}" for k in sorted(FLOAT_KEYS)),
               NATURAL, TOGGLE_MODE, DESKTOP_SCROLL, GHOST_CURSOR,
-              ALLOW_KEYBOARDS, BLACKLIST, EXTRA_DEVICES, IGNORE_DEVICES)
+              SNAP_CURSOR_ON_RELEASE, ALLOW_KEYBOARDS, BLACKLIST,
+              EXTRA_DEVICES, IGNORE_DEVICES)
     asyncio.run(main())
 
 

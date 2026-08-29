@@ -1,5 +1,5 @@
 Name:           midscroll
-Version:        1.14
+Version:        1.15
 Release:        1%{?dist}
 Summary:        Windows-style middle-button drag autoscroll
 License:        Unlicense
@@ -115,6 +115,10 @@ fi
 %config(noreplace) %{_sysconfdir}/midscroll.conf
 
 %changelog
+* Tue Aug 26 2026 midscroll - 1.15-1
+- SNAP_CURSOR_ON_RELEASE: snap the anchored cursor to the ghost position
+  once a drag-scroll ends, matching Windows autoscroll behavior
+
 * Tue Jul 28 2026 midscroll - 1.14-1
 - Ship AppStream metadata, so the settings app has a proper listing in
   Discover and GNOME Software instead of appearing as a bare package
