@@ -708,7 +708,14 @@ def _toggle_key(ev, st, ui, focus):
         # click doesn't also land in whatever is under the cursor.
         if ev.value == 1:
             log.debug("toggle scroll stopped")
-            st.reset()
+            _, dx, dy = st.release()
+            if SNAP_CURSOR_ON_RELEASE:
+                # Catch the anchored cursor up to wherever the real
+                # mouse ended up, like Windows does.
+                sx, sy = int(dx), int(dy)
+                if sx or sy:
+                    log.info("snap cursor: dx=%g dy=%g", sx, sy)
+                    _snap_cursor(ui, sx, sy)
             st.eat_release = code
         return True
     # Idle: only the middle button starts autoscroll.
@@ -802,14 +809,7 @@ async def pump(path, dev, states, tasks, focus, our_paths):
                             ui.syn()
                 continue
             if ev.type == e.EV_REL and ev.code in (e.REL_X, e.REL_Y):
-                if st.toggled:
-                    # Toggle mode: track distance from the origin but let the
-                    # motion through, so the cursor follows the hand like
-                    # Windows autoscroll.
-                    _accumulate(st, ev)
-                    # ui.write(ev.type, ev.code, ev.value)
-                    continue
-                if st.pending or st.active:
+                if st.toggled or ((st.pending or st.active) and not TOGGLE_MODE):
                     # Hold-drag: swallow cursor motion so the pointer stays
                     # anchored at the press point. Scroll events then keep
                     # hitting the original window instead of whatever the
