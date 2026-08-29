@@ -576,7 +576,7 @@ async def ticker(states, notifier, focus):
             last_ghost = now
             # Only an anchored drag has a ghost: in toggle mode the real
             # cursor moves, so there is nothing to stand in for it.
-            dragging = next((s for s in states.values() if s.active), None)
+            dragging = next((s for s in states.values() if s.active or s.toggled), None)
             if dragging is not None:
                 notifier.pos(dragging.dx * GHOST_SCALE,
                              dragging.dy * GHOST_SCALE)
@@ -814,7 +814,7 @@ async def pump(path, dev, states, tasks, focus, our_paths):
                     # motion through, so the cursor follows the hand like
                     # Windows autoscroll.
                     _accumulate(st, ev)
-                    ui.write(ev.type, ev.code, ev.value)
+                    # ui.write(ev.type, ev.code, ev.value)
                     continue
                 if st.pending or st.active:
                     # Hold-drag: swallow cursor motion so the pointer stays

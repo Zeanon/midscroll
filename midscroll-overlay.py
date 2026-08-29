@@ -79,8 +79,9 @@ MAX_OFFSET = 100000  # ignore an implausible position line
 # Where to look for the pointer image, and what it might be called. The
 # ghost is meant to be your cursor, so it is loaded from the same theme
 # the compositor draws with rather than invented here.
-CURSOR_DIRS = ("/usr/share/icons", "")
-CURSOR_NAMES = ("size_all", "")
+CURSOR_DIRS = ("/usr/share/icons", "~/.local/share/icons", "~/.icons",
+               "/usr/local/share/icons", "/usr/share/pixmaps")
+CURSOR_NAMES = ("size_all", "default", "left_ptr", "arrow", "top_left_arrow")
 DEFAULT_CURSOR_SIZE = 24
 XCURSOR_IMAGE = 0xfffd0002  # chunk type for an image, in an Xcursor file
 MAX_CURSOR_PX = 256         # sanity bound on an image we will map
@@ -391,7 +392,6 @@ if WAYLAND:
             return True
 
         def note_line(self):
-            log.info(f"last_line: {time.monotonic()}")
             self.last_line = time.monotonic()
 
         def set_active(self, active):
